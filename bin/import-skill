@@ -4,16 +4,16 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  bin/add-skill <github-tree-url> [local-skill-name]
-  bin/add-skill --repo <git-url> --ref <branch-or-tag> --path <directory> [--name <local-skill-name>]
+  bin/import-skill <github-tree-url> [local-skill-name]
+  bin/import-skill --repo <git-url> --ref <branch-or-tag> --path <directory> [--name <local-skill-name>]
 
 Imports one directory from an upstream Git repository into skills/<local-skill-name>
 as ordinary files. The upstream source is recorded in .skillset/sources.tsv for
 later updates with bin/sync-skill.
 
 Examples:
-  bin/add-skill https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs
-  bin/add-skill --repo https://github.com/acme/skills.git --ref main \
+  bin/import-skill https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs
+  bin/import-skill --repo https://github.com/acme/skills.git --ref main \
     --path skills/review --name acme-review
 EOF
 }

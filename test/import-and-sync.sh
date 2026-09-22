@@ -23,7 +23,11 @@ git -C "$consumer" commit --allow-empty -qm 'Initialize skills repository'
 
 (
   cd "$consumer"
-  "$repo_root/bin/add-skill" --repo "$upstream" --ref main --path skills/example
+  "$repo_root/bin/import-skill" --repo "$upstream" --ref main --path skills/example
+  mkdir -p skills/local-only
+  printf 'local-only skill\n' > skills/local-only/SKILL.md
+  git add skills/local-only/SKILL.md
+  git commit -qm 'Add local-only skill'
   printf 'local customization\n' > skills/example/LOCAL.md
   git add skills/example/LOCAL.md
   git commit -qm 'Customize example skill'
@@ -39,6 +43,13 @@ git -C "$upstream" commit -qm 'Update example skill'
   grep -Fx 'upstream version one' skills/example/SKILL.md >/dev/null
   grep -Fx 'local customization' skills/example/LOCAL.md >/dev/null
   grep -Fx 'upstream version two' skills/example/SKILL.md >/dev/null
+  "$repo_root/bin/rm-skill" example
+  test ! -e skills/example
+  test ! -e .skillset/sources.tsv
+  ! git for-each-ref --format='%(refname)' refs/heads/vendor | grep -q .
+  ! git remote | grep -q '^skill-source-'
+  "$repo_root/bin/rm-skill" local-only
+  test ! -e skills/local-only
 )
 
-printf 'import-and-sync: passed\n'
+printf 'import-sync-remove: passed\n'

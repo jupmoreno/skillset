@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: bin/rm-skill <local-skill-name> [local-skill-name ...]
+
+Removes skills from skills/. Imported skills also have their source mappings
+removed and unused vendor branches and upstream remotes pruned.
+EOF
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+safe_component() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "invalid skill name: $1"
+}
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 'run this command inside your skills Git repository'
+git diff --quiet && git diff --cached --quiet || die 'commit or stash changes before removing a skill'
+[[ $# -gt 0 ]] || { usage >&2; exit 2; }
+
+for name in "$@"; do
+  safe_component "$name"
+done
+
+for name in "$@"; do
+  local_path="skills/$name"
+  [[ -d "$local_path" ]] || die "skill directory does not exist: $local_path"
+done
+
+removed_metadata="$(mktemp "${TMPDIR:-/tmp}/skillset-remove.XXXXXX")"
+remaining_metadata="$(mktemp "${TMPDIR:-/tmp}/skillset-remaining.XXXXXX")"
+trap 'rm -f "$removed_metadata" "$remaining_metadata"' EXIT
+
+if [[ -f .skillset/sources.tsv ]]; then
+  awk -F '\t' -v names="$(IFS=,; printf '%s' "$*")" '
+    BEGIN { split(names, requested, ","); for (i in requested) remove["skills/" requested[i]] = 1 }
+    /^#/ || NF == 0 { next }
+    remove[$1] { print > removed; next }
+    { print > remaining }
+  ' removed="$removed_metadata" remaining="$remaining_metadata" .skillset/sources.tsv
+fi
+
+for name in "$@"; do
+  git rm -r "skills/$name"
+done
+
+if [[ -s "$removed_metadata" && -s "$remaining_metadata" ]]; then
+  {
+    printf '# local_path\trepository\tref\tupstream_path\tremote\tvendor_branch\n'
+    sort "$remaining_metadata"
+  } > .skillset/sources.tsv
+  git add .skillset/sources.tsv
+elif [[ -s "$removed_metadata" ]]; then
+  git rm .skillset/sources.tsv
+fi
+
+while IFS=$'\t' read -r _local_path _repo _ref _source_path remote branch; do
+  [[ -z "$remote" ]] && continue
+  git branch -D "$branch" >/dev/null 2>&1 || true
+  if ! awk -F '\t' -v remote="$remote" '$1 !~ /^#/ && $5 == remote { found = 1 } END { exit !found }' "$remaining_metadata"; then
+    git remote remove "$remote"
+  fi
+done < "$removed_metadata"
+
+if [[ $# -eq 1 ]]; then
+  git commit -m "Remove skill: $1"
+  printf 'Removed skill: %s\n' "$1"
+else
+  git commit -m "Remove skills: $*"
+  printf 'Removed skills: %s\n' "$*"
+fi
