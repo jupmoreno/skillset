@@ -34,6 +34,8 @@ Imported skills are tracked in `.skillset/sources.tsv`. Each record contains the
 local path, repository, ref, upstream path, remote, vendor branch, and last
 merged upstream commit. `bin/import-skill` creates the subtree and source
 metadata commits; `bin/sync-skill` uses that record to merge upstream changes.
+Both commands use squashed subtree commits to avoid importing the full upstream
+history, signing those commits when `commit.gpgSign` is enabled.
 
 Local edits to an imported skill are allowed. Preserve the subtree history and
 source record so Git can merge those edits with future upstream revisions. If a

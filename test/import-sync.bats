@@ -82,6 +82,10 @@ assert_failure() {
   }
 }
 
+assert_signed_commit() {
+  git -C "$1" cat-file -p "$2" | grep -q '^gpgsig '
+}
+
 @test "adds an imported skill and records its provenance" {
   run import_example
 
@@ -91,6 +95,8 @@ assert_failure() {
   assert_success
   [[ "$output" == *'Track example upstream source'* ]]
   [[ "$output" == *'Import example from'* ]]
+  assert_signed_commit "$consumer" 'HEAD^^'
+  assert_signed_commit "$consumer" 'HEAD^^2'
   run grep -F "skills/example	$upstream	main	skills/example" "$consumer/.skillset/sources.tsv"
   assert_success
 }
@@ -105,6 +111,16 @@ assert_failure() {
   run git -C "$consumer" log --format=%s -1
   assert_success
   [ "$output" = 'Track example upstream source' ]
+}
+
+@test "does not sign subtree commits when commit signing is disabled" {
+  git -C "$consumer" config commit.gpgSign false
+
+  run import_example
+
+  assert_success
+  ! git -C "$consumer" cat-file -p 'HEAD^^' | grep -q '^gpgsig '
+  ! git -C "$consumer" cat-file -p 'HEAD^^2' | grep -q '^gpgsig '
 }
 
 @test "adds all explicitly referenced skills once when requested" {
@@ -218,6 +234,21 @@ EOF
   assert_success
   [[ "$output" == *'Sync example from'* ]]
   [[ "$output" == *'Track example upstream revision'* ]]
+  assert_signed_commit "$consumer" 'HEAD^^'
+  assert_signed_commit "$consumer" 'HEAD^^2'
+}
+
+@test "does not sign subtree sync commits when commit signing is disabled" {
+  import_example
+  git -C "$consumer" config commit.gpgSign false
+  printf 'upstream version two\n' >> "$upstream/skills/example/SKILL.md"
+  commit_upstream_change 'Update example skill'
+
+  run sync_example
+
+  assert_success
+  ! git -C "$consumer" cat-file -p 'HEAD^^' | grep -q '^gpgsig '
+  ! git -C "$consumer" cat-file -p 'HEAD^^2' | grep -q '^gpgsig '
 }
 
 @test "syncs a locally modified skill when the changes do not conflict" {

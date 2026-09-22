@@ -17,7 +17,9 @@ different local name:
 bin/import-skill https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs docs-grill
 ```
 
-Importing a skill creates the subtree and source-metadata commits.
+Importing a skill creates a squashed subtree merge and a source-metadata commit.
+When `commit.gpgSign` is enabled, both subtree commits are signed. This preserves
+updateability without importing the upstream repository's full history.
 
 If `fm` or `apfel` is installed, the importer uses it to identify explicit
 references to other upstream skills. It prints the full dependency tree and
@@ -47,8 +49,9 @@ bin/sync-skill
 ```
 
 If both copies changed the same lines, resolve the Git merge conflict, then stage
-and commit the resolution yourself. Syncing a skill creates subtree and
-source-metadata commits when updates are available.
+and commit the resolution yourself. Syncing a skill creates squashed subtree and
+source-metadata commits when updates are available. The subtree commits are
+signed when `commit.gpgSign` is enabled.
 
 ### Remove
 
