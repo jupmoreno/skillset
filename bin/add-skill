@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bin/add-skill <github-tree-url> [local-skill-name]
+  bin/add-skill --repo <git-url> --ref <branch-or-tag> --path <directory> [--name <local-skill-name>]
+
+Imports one directory from an upstream Git repository into skills/<local-skill-name>
+as ordinary files. The upstream source is recorded in .skillset/sources.tsv for
+later updates with bin/sync-skill.
+
+Examples:
+  bin/add-skill https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs
+  bin/add-skill --repo https://github.com/acme/skills.git --ref main \
+    --path skills/review --name acme-review
+EOF
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_clean_worktree() {
+  git diff --quiet && git diff --cached --quiet || die 'commit or stash changes before importing a skill'
+}
+
+safe_component() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "invalid skill name: $1"
+}
+
+safe_path() {
+  [[ "$1" != /* && "$1" != *$'\t'* && "$1" != *$'\n'* && "$1" != *".."* ]] || die "invalid path: $1"
+}
+
+split_upstream_path() {
+  local split_worktree split_commit
+  split_worktree="$(mktemp -d "${TMPDIR:-/tmp}/skillset-split.XXXXXX")"
+  rmdir "$split_worktree"
+  git worktree add --quiet --detach "$split_worktree" "$remote/$ref"
+  if ! split_commit="$(git -C "$split_worktree" subtree split --prefix="$source_path")"; then
+    git worktree remove --force "$split_worktree"
+    return 1
+  fi
+  git worktree remove --force "$split_worktree"
+  printf '%s\n' "$split_commit"
+}
+
+repo=''
+ref=''
+source_path=''
+name=''
+
+if [[ $# -ge 1 && "$1" != --* ]]; then
+  tree_url="$1"
+  shift
+  [[ $# -le 1 ]] || { usage >&2; exit 2; }
+  name="${1:-}"
+
+  prefix='https://github.com/'
+  [[ "$tree_url" == "$prefix"* && "$tree_url" == */tree/* ]] || die 'tree URL must be a GitHub https://github.com/<owner>/<repo>/tree/<ref>/<path> URL'
+  remainder="${tree_url#"$prefix"}"
+  repository_part="${remainder%%/tree/*}"
+  tail="${remainder#*/tree/}"
+  [[ "$repository_part" == */* && "$tail" == */* ]] || die "invalid GitHub tree URL: $tree_url"
+  repo="https://github.com/${repository_part}.git"
+
+  # GitHub ref names may contain '/', so find the longest matching remote branch.
+  while IFS=$'\t' read -r _sha remote_ref; do
+    candidate="${remote_ref#refs/heads/}"
+    if [[ "$tail" == "$candidate/"* ]] && (( ${#candidate} > ${#ref} )); then
+      ref="$candidate"
+      source_path="${tail#"$candidate"/}"
+    fi
+  done < <(git ls-remote --heads "$repo")
+  [[ -n "$ref" && -n "$source_path" ]] || die "could not resolve a branch and directory from: $tree_url"
+else
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="${2:-}"; shift 2 ;;
+      --ref) ref="${2:-}"; shift 2 ;;
+      --path) source_path="${2:-}"; shift 2 ;;
+      --name) name="${2:-}"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+fi
+
+[[ -n "$repo" && -n "$ref" && -n "$source_path" ]] || { usage >&2; exit 2; }
+safe_path "$source_path"
+name="${name:-${source_path##*/}}"
+safe_component "$name"
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 'run this command inside your skills Git repository'
+git rev-parse --verify HEAD >/dev/null 2>&1 || die 'create an initial commit before importing a skill'
+require_clean_worktree
+
+destination="skills/$name"
+[[ ! -e "$destination" ]] || die "destination already exists: $destination"
+[[ ! -f .skillset/sources.tsv ]] || ! awk -F '\t' -v destination="$destination" '$1 == destination { found = 1 } END { exit !found }' .skillset/sources.tsv || die "source metadata already exists for: $destination"
+
+remote_stub="${repo#*://}"
+remote_stub="${remote_stub#*@}"
+remote_stub="${remote_stub%.git}"
+remote_stub="${remote_stub//\//-}"
+remote_stub="${remote_stub//[^A-Za-z0-9._-]/-}"
+remote="skill-source-$remote_stub"
+
+if git remote get-url "$remote" >/dev/null 2>&1; then
+  [[ "$(git remote get-url "$remote")" == "$repo" ]] || die "remote name is already used for a different URL: $remote"
+else
+  git remote add "$remote" "$repo"
+fi
+
+git fetch --no-tags "$remote" "$ref"
+git cat-file -e "$remote/$ref:$source_path" 2>/dev/null || die "upstream path does not exist at $remote/$ref: $source_path"
+
+branch="vendor/$remote-$name"
+split_commit="$(split_upstream_path)"
+git branch -f "$branch" "$split_commit"
+
+git subtree add --prefix="$destination" -m "Import $name from $repo" . "$branch"
+
+mkdir -p .skillset
+if [[ ! -f .skillset/sources.tsv ]]; then
+  printf '# local_path\trepository\tref\tupstream_path\tremote\tvendor_branch\n' > .skillset/sources.tsv
+fi
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$destination" "$repo" "$ref" "$source_path" "$remote" "$branch" >> .skillset/sources.tsv
+git add .skillset/sources.tsv
+git commit -m "Track $name upstream source"
+
+printf 'Imported %s into %s. Run bin/sync-skill %s to merge future upstream changes.\n' "$source_path" "$destination" "$name"

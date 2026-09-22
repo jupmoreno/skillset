@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: bin/sync-skill [local-skill-name ...]
+
+Fetches the configured upstream source for each named skill and merges changes
+from its recorded upstream directory. With no names, synchronizes every imported
+skill listed in .skillset/sources.tsv.
+EOF
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+split_upstream_path() {
+  local source_path="$1" remote="$2" ref="$3" split_worktree split_commit
+  split_worktree="$(mktemp -d "${TMPDIR:-/tmp}/skillset-split.XXXXXX")"
+  rmdir "$split_worktree"
+  git worktree add --quiet --detach "$split_worktree" "$remote/$ref"
+  if ! split_commit="$(git -C "$split_worktree" subtree split --prefix="$source_path")"; then
+    git worktree remove --force "$split_worktree"
+    return 1
+  fi
+  git worktree remove --force "$split_worktree"
+  printf '%s\n' "$split_commit"
+}
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 'run this command inside your skills Git repository'
+git diff --quiet && git diff --cached --quiet || die 'commit or stash changes before syncing skills'
+[[ -f .skillset/sources.tsv ]] || die 'no imported skills are registered in .skillset/sources.tsv'
+
+sync_row() {
+  local local_path="$1" repo="$2" ref="$3" source_path="$4" remote="$5" branch="$6"
+  local skill_name="${local_path#skills/}"
+  local split_commit
+
+  if [[ ${#requested[@]} -gt 0 ]]; then
+    local wanted
+    for wanted in "${requested[@]}"; do
+      [[ "$wanted" == "$skill_name" ]] && break
+    done
+    [[ "${wanted:-}" == "$skill_name" ]] || return 0
+  fi
+
+  git remote get-url "$remote" >/dev/null 2>&1 || git remote add "$remote" "$repo"
+  [[ "$(git remote get-url "$remote")" == "$repo" ]] || die "remote $remote no longer points at $repo"
+  git fetch --no-tags "$remote" "$ref"
+  git cat-file -e "$remote/$ref:$source_path" 2>/dev/null || die "upstream path no longer exists at $remote/$ref: $source_path"
+
+  split_commit="$(split_upstream_path "$source_path" "$remote" "$ref")"
+  git branch -f "$branch" "$split_commit"
+  git subtree pull --prefix="$local_path" -m "Sync $skill_name from $repo" . "$branch"
+}
+
+requested=("$@")
+if [[ "${requested[0]:-}" == '-h' || "${requested[0]:-}" == '--help' ]]; then
+  usage
+  exit 0
+fi
+
+matched=0
+while IFS=$'\t' read -r local_path repo ref source_path remote branch; do
+  [[ -z "$local_path" || "$local_path" == \#* ]] && continue
+  if [[ ${#requested[@]} -eq 0 ]]; then
+    matched=1
+  else
+    for wanted in "${requested[@]}"; do
+      [[ "$wanted" == "${local_path#skills/}" ]] && matched=1
+    done
+  fi
+  sync_row "$local_path" "$repo" "$ref" "$source_path" "$remote" "$branch"
+done < .skillset/sources.tsv
+
+[[ $matched -eq 1 ]] || die "none of the requested skills are registered"
