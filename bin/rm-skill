@@ -7,7 +7,7 @@ Usage: bin/rm-skill <local-skill-name> [local-skill-name ...]
 
 Removes skills from skills/. Imported skills also have their source mappings
 removed and unused vendor branches and upstream remotes pruned. This command
-does not stage or commit changes.
+commits the removal without including unrelated worktree changes.
 EOF
 }
 
@@ -21,7 +21,6 @@ safe_component() {
 }
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 'run this command inside your skills Git repository'
-git diff --quiet && git diff --cached --quiet || die 'commit or stash changes before removing a skill'
 [[ $# -gt 0 ]] || { usage >&2; exit 2; }
 
 for name in "$@"; do
@@ -32,6 +31,15 @@ for name in "$@"; do
   local_path="skills/$name"
   [[ -d "$local_path" ]] || die "skill directory does not exist: $local_path"
 done
+
+for name in "$@"; do
+  if ! git diff --quiet -- "skills/$name" || ! git diff --cached --quiet -- "skills/$name"; then
+    die "commit or stash changes to skills/$name before removing it"
+  fi
+done
+if ! git diff --quiet -- .skillset/sources.tsv || ! git diff --cached --quiet -- .skillset/sources.tsv; then
+  die 'commit or stash changes to .skillset/sources.tsv before removing a skill'
+fi
 
 removed_metadata="$(mktemp "${TMPDIR:-/tmp}/skillset-remove.XXXXXX")"
 remaining_metadata="$(mktemp "${TMPDIR:-/tmp}/skillset-remaining.XXXXXX")"
@@ -62,13 +70,23 @@ fi
 while IFS=$'\t' read -r _local_path _repo _ref _source_path remote branch; do
   [[ -z "$remote" ]] && continue
   git branch -D "$branch" >/dev/null 2>&1 || true
-  if ! awk -F '\t' -v remote="$remote" '$1 !~ /^#/ && $5 == remote { found = 1 } END { exit !found }' "$remaining_metadata"; then
+  if git remote get-url "$remote" >/dev/null 2>&1 && ! awk -F '\t' -v remote="$remote" '$1 !~ /^#/ && $5 == remote { found = 1 } END { exit !found }' "$remaining_metadata"; then
     git remote remove "$remote"
   fi
 done < "$removed_metadata"
 
+commit_paths=()
+for name in "$@"; do
+  commit_paths+=("skills/$name")
+done
+if git ls-files --error-unmatch .skillset/sources.tsv >/dev/null 2>&1; then
+  commit_paths+=(.skillset/sources.tsv)
+fi
+git add -u -- "${commit_paths[@]}"
 if [[ $# -eq 1 ]]; then
-  printf 'Removed skill: %s. Review, stage, and commit the changes.\n' "$1"
+  git commit --only -m "Remove $1 skill" -- "${commit_paths[@]}"
+  printf 'Removed skill: %s.\n' "$1"
 else
-  printf 'Removed skills: %s. Review, stage, and commit the changes.\n' "$*"
+  git commit --only -m 'Remove skills' -- "${commit_paths[@]}"
+  printf 'Removed skills: %s.\n' "$*"
 fi

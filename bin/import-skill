@@ -11,6 +11,10 @@ Imports one directory from an upstream Git repository into skills/<local-skill-n
 with a Git subtree merge commit. The upstream source is recorded in
 .skillset/sources.tsv for later updates with bin/sync-skill.
 
+When fm or apfel is available, the importer also checks the upstream SKILL.md
+for explicit references to other skills in that repository. It lists those
+references and asks before importing any that are not already present locally.
+
 Examples:
   bin/import-skill https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs
   bin/import-skill --repo https://github.com/acme/skills.git --ref main \
@@ -36,16 +40,110 @@ safe_path() {
 }
 
 split_upstream_path() {
-  local split_worktree split_commit
+  local path="$1" split_worktree split_commit
   split_worktree="$(mktemp -d "${TMPDIR:-/tmp}/skillset-split.XXXXXX")"
   rmdir "$split_worktree"
   git worktree add --quiet --detach "$split_worktree" "$remote/$ref"
-  if ! split_commit="$(git -C "$split_worktree" subtree split --prefix="$source_path")"; then
+  if ! split_commit="$(git -C "$split_worktree" subtree split --prefix="$path")"; then
     git worktree remove --force "$split_worktree"
     return 1
   fi
   git worktree remove --force "$split_worktree"
   printf '%s\n' "$split_commit"
+}
+
+build_skill_catalog() {
+  local catalog_file="$1" manifest_path manifest name
+
+  git ls-tree -r --name-only "$remote/$ref" | while IFS= read -r manifest_path; do
+    [[ "$manifest_path" == */SKILL.md || "$manifest_path" == SKILL.md ]] || continue
+    manifest="$(git show "$remote/$ref:$manifest_path")"
+    name="$(printf '%s\n' "$manifest" | awk '
+      /^---[[:space:]]*$/ { delimiters++; next }
+      delimiters == 1 && $1 == "name:" {
+        sub(/^[[:space:]]*name:[[:space:]]*/, "")
+        gsub(/^["\047]|["\047]$/, "")
+        print
+        exit
+      }
+      delimiters >= 2 { exit }
+    ')"
+    [[ -n "$name" ]] || name="${manifest_path%/SKILL.md}"
+    name="${name##*/}"
+    printf '%s\t%s\n' "$name" "${manifest_path%/SKILL.md}"
+  done | sort -u > "$catalog_file"
+}
+
+detect_referenced_skills() {
+  local primary_path="$1" source_file catalog_file response_file prompt
+  source_file="$(mktemp "${TMPDIR:-/tmp}/skillset-source.XXXXXX")"
+  catalog_file="$(mktemp "${TMPDIR:-/tmp}/skillset-catalog.XXXXXX")"
+  response_file="$(mktemp "${TMPDIR:-/tmp}/skillset-references.XXXXXX")"
+  if ! git show "$remote/$ref:$primary_path/SKILL.md" > "$source_file" 2>/dev/null; then
+    rm -f "$source_file" "$catalog_file" "$response_file"
+    return 0
+  fi
+  build_skill_catalog "$catalog_file"
+  if [[ ! -s "$catalog_file" ]]; then
+    rm -f "$source_file" "$catalog_file" "$response_file"
+    return 0
+  fi
+
+  prompt='Analyze the attached source skill and skill catalog. Identify every distinct other skill that the source explicitly instructs an agent to load, call, invoke, or delegate to. Do not infer topical relationships. Return only skill names from the catalog, one per line. Exclude the source skill itself. Return NONE if there are no explicit references.'
+  if command -v fm >/dev/null 2>&1; then
+    if ! { printf 'SOURCE SKILL:\n'; cat "$source_file"; printf '\nSKILL CATALOG:\n'; cat "$catalog_file"; } | fm "$prompt" > "$response_file"; then
+      printf 'warning: fm could not inspect skill references; importing only the requested skill.\n' >&2
+      rm -f "$source_file" "$catalog_file" "$response_file"
+      return 0
+    fi
+  elif command -v apfel >/dev/null 2>&1; then
+    if ! apfel --quiet --temperature 0 --max-tokens 512 -f "$source_file" -f "$catalog_file" "$prompt" > "$response_file"; then
+      printf 'warning: apfel could not inspect skill references; importing only the requested skill.\n' >&2
+      rm -f "$source_file" "$catalog_file" "$response_file"
+      return 0
+    fi
+  else
+    rm -f "$source_file" "$catalog_file" "$response_file"
+    return 0
+  fi
+
+  while IFS=$'\t' read -r catalog_name catalog_path; do
+    [[ "$catalog_path" != "$primary_path" ]] || continue
+    if awk -v name="$catalog_name" '$0 == name { found = 1 } END { exit !found }' "$response_file"; then
+      printf '%s\t%s\n' "$catalog_name" "$catalog_path"
+    fi
+  done < "$catalog_file"
+  rm -f "$source_file" "$catalog_file" "$response_file"
+}
+
+import_skill() {
+  local skill_name="$1" skill_path="$2" destination split_commit branch
+  safe_component "$skill_name"
+  safe_path "$skill_path"
+  destination="skills/$skill_name"
+
+  if [[ -e "$destination" ]]; then
+    printf 'Skipping %s: already present at %s.\n' "$skill_name" "$destination"
+    return 0
+  fi
+  if [[ -f .skillset/sources.tsv ]] && awk -F '\t' -v destination="$destination" '$1 == destination { found = 1 } END { exit found ? 0 : 1 }' .skillset/sources.tsv; then
+    die "source metadata already exists for: $destination"
+  fi
+  git cat-file -e "$remote/$ref:$skill_path" 2>/dev/null || die "upstream path does not exist at $remote/$ref: $skill_path"
+
+  branch="vendor/$remote-$skill_name"
+  split_commit="$(split_upstream_path "$skill_path")"
+  git branch -f "$branch" "$split_commit"
+  git subtree add --prefix="$destination" -m "Import $skill_name from $repo" . "$branch"
+
+  mkdir -p .skillset
+  if [[ ! -f .skillset/sources.tsv ]]; then
+    printf '# local_path\trepository\tref\tupstream_path\tremote\tvendor_branch\tupstream_commit\n' > .skillset/sources.tsv
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$destination" "$repo" "$ref" "$skill_path" "$remote" "$branch" "$split_commit" >> .skillset/sources.tsv
+  git add .skillset/sources.tsv
+  git commit -m "Track $skill_name upstream source"
+  printf 'Imported %s into %s.\n' "$skill_path" "$destination"
 }
 
 repo=''
@@ -118,18 +216,25 @@ fi
 git fetch --no-tags "$remote" "$ref"
 git cat-file -e "$remote/$ref:$source_path" 2>/dev/null || die "upstream path does not exist at $remote/$ref: $source_path"
 
-branch="vendor/$remote-$name"
-split_commit="$(split_upstream_path)"
-git branch -f "$branch" "$split_commit"
+referenced_skills=()
+while IFS=$'\t' read -r referenced_name referenced_path; do
+  [[ -n "$referenced_name" ]] || continue
+  referenced_skills+=("$referenced_name"$'\t'"$referenced_path")
+done < <(detect_referenced_skills "$source_path")
 
-git subtree add --prefix="$destination" -m "Import $name from $repo" . "$branch"
-
-mkdir -p .skillset
-if [[ ! -f .skillset/sources.tsv ]]; then
-  printf '# local_path\trepository\tref\tupstream_path\tremote\tvendor_branch\tupstream_commit\n' > .skillset/sources.tsv
+if [[ ${#referenced_skills[@]} -gt 0 ]]; then
+  printf 'The upstream skill %s explicitly references:\n' "$name"
+  for referenced_skill in "${referenced_skills[@]}"; do
+    printf '  - %s (%s)\n' "${referenced_skill%%$'\t'*}" "${referenced_skill#*$'\t'}"
+  done
+  printf 'Import referenced skills that are not already present? [y/N] '
+  read -r import_references || die 'could not read the referenced-skill import response'
 fi
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$destination" "$repo" "$ref" "$source_path" "$remote" "$branch" "$split_commit" >> .skillset/sources.tsv
-git add .skillset/sources.tsv
-git commit -m "Track $name upstream source"
 
-printf 'Imported %s into %s. Run bin/sync-skill %s to merge future upstream changes.\n' "$source_path" "$destination" "$name"
+import_skill "$name" "$source_path"
+if [[ "${import_references:-}" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+  for referenced_skill in "${referenced_skills[@]}"; do
+    import_skill "${referenced_skill%%$'\t'*}" "${referenced_skill#*$'\t'}"
+  done
+fi
+printf 'Run bin/sync-skill %s to merge future upstream changes.\n' "$name"

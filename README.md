@@ -17,6 +17,10 @@ bin/import-skill https://github.com/mattpocock/skills/tree/main/skills/engineeri
 
 Importing a skill creates the subtree and source-metadata commits.
 
+If `fm` or `apfel` is installed, the importer uses it to identify explicit
+references to other upstream skills. It prints the references and asks whether
+to import the missing ones before importing the requested skill.
+
 For another Git host or source reference, provide the repository, branch, and
 directory explicitly:
 
@@ -57,4 +61,6 @@ Remove several skills in one commit:
 bin/rm-skill grill-with-docs domain-modeling
 ```
 
-`rm-skill` never stages or commits changes; that lifecycle remains yours.
+`rm-skill` commits the selected removal and source-registry update while
+leaving unrelated staged and unstaged work unchanged. Commit or stash changes
+to the selected skill or `.skillset/sources.tsv` before removing it.
