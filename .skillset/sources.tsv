@@ -1,0 +1,2 @@
+# local_path	repository	ref	upstream_path	remote	vendor_branch	upstream_commit
+skills/grill-with-docs	https://github.com/mattpocock/skills.git	main	skills/engineering/grill-with-docs	skill-source-github.com-mattpocock-skills	vendor/skill-source-github.com-mattpocock-skills-grill-with-docs	70b6090e254b07cf376a40033d44bcf6cff9fff4
