@@ -20,10 +20,11 @@ metadata. Do not replace an import/sync workflow with a one-time file copy.
 - `bin/import-skill`: imports one upstream skill as a Git subtree and records
   its source.
 - `bin/sync-skill`: fetches and merges new revisions for imported skills.
-- `bin/rm-skill`: removes imported or local-only skills without committing.
+- `bin/rm-skill`: removes imported or local-only skills and commits the scoped
+  removal.
 - `.skillset/sources.tsv`: authoritative mapping for imported skills only.
-- `test/import-and-sync.sh`: end-to-end coverage for importing, local changes,
-  syncing, and removal.
+- `test/import-sync.bats`: Bats coverage for importing, local changes, syncing,
+  conflicts, and removal.
 
 ## Skill Types
 
@@ -49,13 +50,14 @@ They are owned and updated entirely by this repository.
 
 1. Import an upstream skill with `bin/import-skill`, not by copying files into
    `skills/`.
-2. Commit or stash worktree changes before running `import-skill`, `sync-skill`,
-   or `rm-skill`; these commands require a clean worktree.
+2. Commit or stash worktree changes before running `import-skill` or
+   `sync-skill`; these commands require a clean worktree.
 3. Update imported skills with `bin/sync-skill <name>` or `bin/sync-skill`.
-4. Use `bin/rm-skill <name>` to remove either type of skill. Review, stage, and
-   commit its changes yourself.
+4. Use `bin/rm-skill <name>` to remove either type of skill. It commits only
+   the selected skill and its source-registry update, leaving unrelated changes
+   untouched.
 5. When changing the import, sync, or removal behavior, update
-   `test/import-and-sync.sh` and run it.
+   `test/import-sync.bats` and run it.
 
 Do not manually edit, discard, or fabricate `.skillset/sources.tsv` rows. Do
 not use destructive Git commands to make a subtree update appear clean. Do not
@@ -80,7 +82,7 @@ artifacts in a way that prevents `npx skills add` from installing it.
 After changing the management scripts or skill-source behavior, run:
 
 ```bash
-test/import-and-sync.sh
+bats test/import-sync.bats
 ```
 
 Before completing any change, inspect `git diff` and confirm imported-skill

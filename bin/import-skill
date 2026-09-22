@@ -12,8 +12,8 @@ with a Git subtree merge commit. The upstream source is recorded in
 .skillset/sources.tsv for later updates with bin/sync-skill.
 
 When fm or apfel is available, the importer also checks the upstream SKILL.md
-for explicit references to other skills in that repository. It lists those
-references and asks before importing any that are not already present locally.
+for explicit references to other skills in that repository. It prints the
+full dependency tree and asks before importing any missing skills.
 
 Examples:
   bin/import-skill https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs
@@ -116,6 +116,73 @@ detect_referenced_skills() {
   rm -f "$source_file" "$catalog_file" "$response_file"
 }
 
+skill_name_for_path() {
+  awk -F '\t' -v path="$1" '$2 == path { print $1; exit }' "$skill_catalog"
+}
+
+skill_state_for_path() {
+  awk -F '\t' -v path="$1" '$1 == path { print $2; exit }' "$dependency_state"
+}
+
+set_skill_state() {
+  local path="$1" state="$2"
+  awk -F '\t' -v OFS='\t' -v path="$path" -v state="$state" '
+    $1 == path { next }
+    { print }
+    END { print path, state }
+  ' "$dependency_state" > "$dependency_state.tmp"
+  mv "$dependency_state.tmp" "$dependency_state"
+}
+
+render_dependency_tree() {
+  local path="$1" prefix="$2" connector="$3" root="$4"
+  local skill_name state child_prefix references_file child_name child_path count index marker
+
+  skill_name="$(skill_name_for_path "$path")"
+  [[ -n "$skill_name" ]] || return 0
+  state="$(skill_state_for_path "$path")"
+  if [[ "$state" == visiting ]]; then
+    printf '%s%s%s [cycle]\n' "$prefix" "$connector" "$skill_name"
+    return 0
+  fi
+  if [[ "$state" == done ]]; then
+    printf '%s%s%s [shared]\n' "$prefix" "$connector" "$skill_name"
+    return 0
+  fi
+
+  marker=''
+  [[ -e "skills/$skill_name" ]] && marker=' [installed]'
+  printf '%s%s%s%s\n' "$prefix" "$connector" "$skill_name" "$marker"
+  set_skill_state "$path" visiting
+
+  references_file="$(mktemp "${TMPDIR:-/tmp}/skillset-children.XXXXXX")"
+  detect_referenced_skills "$path" > "$references_file"
+  count="$(wc -l < "$references_file" | tr -d ' ')"
+  index=0
+  if [[ -z "$connector" ]]; then
+    child_prefix="$prefix"
+  elif [[ "$connector" == '`- ' ]]; then
+    child_prefix="${prefix}   "
+  else
+    child_prefix="${prefix}|  "
+  fi
+  while IFS=$'\t' read -r child_name child_path; do
+    [[ -n "$child_path" ]] || continue
+    index=$((index + 1))
+    if [[ "$index" -eq "$count" ]]; then
+      render_dependency_tree "$child_path" "$child_prefix" '`- ' false
+    else
+      render_dependency_tree "$child_path" "$child_prefix" '+- ' false
+    fi
+  done < "$references_file"
+  rm -f "$references_file"
+
+  set_skill_state "$path" done
+  if [[ "$root" == false && ! -e "skills/$skill_name" ]]; then
+    printf '%s\t%s\n' "$skill_name" "$path" >> "$dependency_candidates"
+  fi
+}
+
 import_skill() {
   local skill_name="$1" skill_path="$2" destination split_commit branch
   safe_component "$skill_name"
@@ -216,25 +283,26 @@ fi
 git fetch --no-tags "$remote" "$ref"
 git cat-file -e "$remote/$ref:$source_path" 2>/dev/null || die "upstream path does not exist at $remote/$ref: $source_path"
 
-referenced_skills=()
-while IFS=$'\t' read -r referenced_name referenced_path; do
-  [[ -n "$referenced_name" ]] || continue
-  referenced_skills+=("$referenced_name"$'\t'"$referenced_path")
-done < <(detect_referenced_skills "$source_path")
+skill_catalog="$(mktemp "${TMPDIR:-/tmp}/skillset-catalog.XXXXXX")"
+dependency_state="$(mktemp "${TMPDIR:-/tmp}/skillset-dependencies.XXXXXX")"
+dependency_candidates="$(mktemp "${TMPDIR:-/tmp}/skillset-candidates.XXXXXX")"
+trap 'rm -f "$skill_catalog" "$dependency_state" "$dependency_state.tmp" "$dependency_candidates"' EXIT
+build_skill_catalog "$skill_catalog"
 
-if [[ ${#referenced_skills[@]} -gt 0 ]]; then
-  printf 'The upstream skill %s explicitly references:\n' "$name"
-  for referenced_skill in "${referenced_skills[@]}"; do
-    printf '  - %s (%s)\n' "${referenced_skill%%$'\t'*}" "${referenced_skill#*$'\t'}"
-  done
-  printf 'Import referenced skills that are not already present? [y/N] '
+printf 'Upstream skill dependency tree:\n'
+render_dependency_tree "$source_path" '' '' true
+
+if [[ -s "$dependency_candidates" ]]; then
+  printf 'Import all missing referenced skills? [y/N] '
   read -r import_references || die 'could not read the referenced-skill import response'
 fi
 
 import_skill "$name" "$source_path"
 if [[ "${import_references:-}" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-  for referenced_skill in "${referenced_skills[@]}"; do
-    import_skill "${referenced_skill%%$'\t'*}" "${referenced_skill#*$'\t'}"
-  done
+  while IFS=$'\t' read -r referenced_name referenced_path; do
+    import_skill "$referenced_name" "$referenced_path"
+  done < "$dependency_candidates"
 fi
+trap - EXIT
+rm -f "$skill_catalog" "$dependency_state" "$dependency_state.tmp" "$dependency_candidates"
 printf 'Run bin/sync-skill %s to merge future upstream changes.\n' "$name"

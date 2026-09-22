@@ -1,6 +1,8 @@
 # Skillset
 
-## Import
+## Usage
+
+### Import
 
 Import one skill from a GitHub directory URL:
 
@@ -18,8 +20,9 @@ bin/import-skill https://github.com/mattpocock/skills/tree/main/skills/engineeri
 Importing a skill creates the subtree and source-metadata commits.
 
 If `fm` or `apfel` is installed, the importer uses it to identify explicit
-references to other upstream skills. It prints the references and asks whether
-to import the missing ones before importing the requested skill.
+references to other upstream skills. It prints the full dependency tree and
+asks whether to import all missing referenced skills before importing the
+requested skill.
 
 For another Git host or source reference, provide the repository, branch, and
 directory explicitly:
@@ -29,7 +32,7 @@ bin/import-skill --repo https://github.com/acme/skills.git --ref main \
   --path skills/review --name acme-review
 ```
 
-## Sync
+### Sync
 
 Merge upstream changes for one imported skill:
 
@@ -47,7 +50,7 @@ If both copies changed the same lines, resolve the Git merge conflict, then stag
 and commit the resolution yourself. Syncing a skill creates subtree and
 source-metadata commits when updates are available.
 
-## Remove
+### Remove
 
 Remove an imported or local-only skill:
 
@@ -64,3 +67,14 @@ bin/rm-skill grill-with-docs domain-modeling
 `rm-skill` commits the selected removal and source-registry update while
 leaving unrelated staged and unstaged work unchanged. Commit or stash changes
 to the selected skill or `.skillset/sources.tsv` before removing it.
+
+## Building
+
+### Test
+
+The import, sync, and removal workflows are covered by Bats integration tests
+that use temporary local Git repositories:
+
+```bash
+bats test/import-sync.bats
+```

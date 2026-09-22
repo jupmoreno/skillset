@@ -67,10 +67,10 @@ elif [[ -s "$removed_metadata" ]]; then
   rm .skillset/sources.tsv
 fi
 
-while IFS=$'\t' read -r _local_path _repo _ref _source_path remote branch; do
+while IFS=$'\t' read -r _local_path _repo _ref _source_path remote branch _upstream_commit; do
   [[ -z "$remote" ]] && continue
   git branch -D "$branch" >/dev/null 2>&1 || true
-  if git remote get-url "$remote" >/dev/null 2>&1 && ! awk -F '\t' -v remote="$remote" '$1 !~ /^#/ && $5 == remote { found = 1 } END { exit !found }' "$remaining_metadata"; then
+  if git remote get-url "$remote" >/dev/null 2>&1 && { [[ ! -s "$remaining_metadata" ]] || ! awk -F '\t' -v remote="$remote" '$1 !~ /^#/ && $5 == remote { found = 1 } END { exit !found }' "$remaining_metadata"; }; then
     git remote remove "$remote"
   fi
 done < "$removed_metadata"
