@@ -6,7 +6,8 @@ usage() {
 Usage: bin/rm-skill <local-skill-name> [local-skill-name ...]
 
 Removes skills from skills/. Imported skills also have their source mappings
-removed and unused vendor branches and upstream remotes pruned.
+removed and unused vendor branches and upstream remotes pruned. This command
+does not stage or commit changes.
 EOF
 }
 
@@ -46,17 +47,16 @@ if [[ -f .skillset/sources.tsv ]]; then
 fi
 
 for name in "$@"; do
-  git rm -r "skills/$name"
+  rm -rf "skills/$name"
 done
 
 if [[ -s "$removed_metadata" && -s "$remaining_metadata" ]]; then
   {
-    printf '# local_path\trepository\tref\tupstream_path\tremote\tvendor_branch\n'
+    printf '# local_path\trepository\tref\tupstream_path\tremote\tvendor_branch\tupstream_commit\n'
     sort "$remaining_metadata"
   } > .skillset/sources.tsv
-  git add .skillset/sources.tsv
 elif [[ -s "$removed_metadata" ]]; then
-  git rm .skillset/sources.tsv
+  rm .skillset/sources.tsv
 fi
 
 while IFS=$'\t' read -r _local_path _repo _ref _source_path remote branch; do
@@ -68,9 +68,7 @@ while IFS=$'\t' read -r _local_path _repo _ref _source_path remote branch; do
 done < "$removed_metadata"
 
 if [[ $# -eq 1 ]]; then
-  git commit -m "Remove skill: $1"
-  printf 'Removed skill: %s\n' "$1"
+  printf 'Removed skill: %s. Review, stage, and commit the changes.\n' "$1"
 else
-  git commit -m "Remove skills: $*"
-  printf 'Removed skills: %s\n' "$*"
+  printf 'Removed skills: %s. Review, stage, and commit the changes.\n' "$*"
 fi

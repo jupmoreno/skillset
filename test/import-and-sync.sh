@@ -44,11 +44,15 @@ git -C "$upstream" commit -qm 'Update example skill'
   grep -Fx 'local customization' skills/example/LOCAL.md >/dev/null
   grep -Fx 'upstream version two' skills/example/SKILL.md >/dev/null
   "$repo_root/bin/rm-skill" example
+  git add -u .skillset skills/example
+  git commit -qm 'Remove imported example skill'
   test ! -e skills/example
   test ! -e .skillset/sources.tsv
   ! git for-each-ref --format='%(refname)' refs/heads/vendor | grep -q .
   ! git remote | grep -q '^skill-source-'
   "$repo_root/bin/rm-skill" local-only
+  git add -u skills/local-only
+  git commit -qm 'Remove local-only skill'
   test ! -e skills/local-only
 )
 

@@ -2,13 +2,6 @@
 
 ## Import
 
-Create an initial commit before importing the first skill:
-
-```bash
-git add .
-git commit -m "Initialize skillset"
-```
-
 Import one skill from a GitHub directory URL:
 
 ```bash
@@ -21,6 +14,8 @@ different local name:
 ```bash
 bin/import-skill https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs docs-grill
 ```
+
+Importing a skill creates the subtree and source-metadata commits.
 
 For another Git host or source reference, provide the repository, branch, and
 directory explicitly:
@@ -44,8 +39,9 @@ Merge updates for every imported skill:
 bin/sync-skill
 ```
 
-If both copies changed the same lines, resolve the Git merge conflict, stage the
-resolution, and commit it.
+If both copies changed the same lines, resolve the Git merge conflict, then stage
+and commit the resolution yourself. Syncing a skill creates subtree and
+source-metadata commits when updates are available.
 
 ## Remove
 
@@ -60,3 +56,5 @@ Remove several skills in one commit:
 ```bash
 bin/rm-skill grill-with-docs domain-modeling
 ```
+
+`rm-skill` never stages or commits changes; that lifecycle remains yours.

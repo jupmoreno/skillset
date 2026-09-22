@@ -8,8 +8,8 @@ Usage:
   bin/import-skill --repo <git-url> --ref <branch-or-tag> --path <directory> [--name <local-skill-name>]
 
 Imports one directory from an upstream Git repository into skills/<local-skill-name>
-as ordinary files. The upstream source is recorded in .skillset/sources.tsv for
-later updates with bin/sync-skill.
+with a Git subtree merge commit. The upstream source is recorded in
+.skillset/sources.tsv for later updates with bin/sync-skill.
 
 Examples:
   bin/import-skill https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs
@@ -126,9 +126,9 @@ git subtree add --prefix="$destination" -m "Import $name from $repo" . "$branch"
 
 mkdir -p .skillset
 if [[ ! -f .skillset/sources.tsv ]]; then
-  printf '# local_path\trepository\tref\tupstream_path\tremote\tvendor_branch\n' > .skillset/sources.tsv
+  printf '# local_path\trepository\tref\tupstream_path\tremote\tvendor_branch\tupstream_commit\n' > .skillset/sources.tsv
 fi
-printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$destination" "$repo" "$ref" "$source_path" "$remote" "$branch" >> .skillset/sources.tsv
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$destination" "$repo" "$ref" "$source_path" "$remote" "$branch" "$split_commit" >> .skillset/sources.tsv
 git add .skillset/sources.tsv
 git commit -m "Track $name upstream source"
 

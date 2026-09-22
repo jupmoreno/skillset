@@ -34,7 +34,7 @@ git diff --quiet && git diff --cached --quiet || die 'commit or stash changes be
 [[ -f .skillset/sources.tsv ]] || die 'no imported skills are registered in .skillset/sources.tsv'
 
 sync_row() {
-  local local_path="$1" repo="$2" ref="$3" source_path="$4" remote="$5" branch="$6"
+  local local_path="$1" repo="$2" ref="$3" source_path="$4" remote="$5" branch="$6" upstream_commit="$7"
   local skill_name="${local_path#skills/}"
   local split_commit
 
@@ -52,8 +52,23 @@ sync_row() {
   git cat-file -e "$remote/$ref:$source_path" 2>/dev/null || die "upstream path no longer exists at $remote/$ref: $source_path"
 
   split_commit="$(split_upstream_path "$source_path" "$remote" "$ref")"
+  [[ "$split_commit" == "$upstream_commit" ]] && {
+    printf '%s is already up to date.\n' "$skill_name"
+    return 0
+  }
+
   git branch -f "$branch" "$split_commit"
   git subtree pull --prefix="$local_path" -m "Sync $skill_name from $repo" . "$branch"
+
+  awk -F '\t' -v OFS='\t' -v local_path="$local_path" -v upstream_commit="$split_commit" '
+    /^#/ { print; next }
+    $1 == local_path { $7 = upstream_commit }
+    { print }
+  ' .skillset/sources.tsv > .skillset/sources.tsv.tmp
+  mv .skillset/sources.tsv.tmp .skillset/sources.tsv
+  git add .skillset/sources.tsv
+  git commit -m "Track $skill_name upstream revision"
+  printf 'Synced upstream updates for %s.\n' "$skill_name"
 }
 
 requested=("$@")
@@ -63,7 +78,7 @@ if [[ "${requested[0]:-}" == '-h' || "${requested[0]:-}" == '--help' ]]; then
 fi
 
 matched=0
-while IFS=$'\t' read -r local_path repo ref source_path remote branch; do
+while IFS=$'\t' read -r local_path repo ref source_path remote branch upstream_commit; do
   [[ -z "$local_path" || "$local_path" == \#* ]] && continue
   if [[ ${#requested[@]} -eq 0 ]]; then
     matched=1
@@ -72,7 +87,8 @@ while IFS=$'\t' read -r local_path repo ref source_path remote branch; do
       [[ "$wanted" == "${local_path#skills/}" ]] && matched=1
     done
   fi
-  sync_row "$local_path" "$repo" "$ref" "$source_path" "$remote" "$branch"
+  [[ -n "$upstream_commit" ]] || upstream_commit="$(git rev-parse "$branch")"
+  sync_row "$local_path" "$repo" "$ref" "$source_path" "$remote" "$branch" "$upstream_commit"
 done < .skillset/sources.tsv
 
 [[ $matched -eq 1 ]] || die "none of the requested skills are registered"
