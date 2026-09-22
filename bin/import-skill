@@ -100,17 +100,35 @@ build_skill_catalog() {
 }
 
 detect_referenced_skills() {
-  local primary_path="$1" source_file excerpt_file response_file prompt
+  local primary_path="$1" source_file excerpt_file candidates_file response_file prompt primary_name
   source_file="$(mktemp "${TMPDIR:-/tmp}/skillset-source.XXXXXX")"
   excerpt_file="$(mktemp "${TMPDIR:-/tmp}/skillset-excerpt.XXXXXX")"
+  candidates_file="$(mktemp "${TMPDIR:-/tmp}/skillset-candidates.XXXXXX")"
   response_file="$(mktemp "${TMPDIR:-/tmp}/skillset-references.XXXXXX")"
   if ! git show "$remote/$ref:$primary_path/SKILL.md" > "$source_file" 2>/dev/null; then
-    rm -f "$source_file" "$excerpt_file" "$response_file"
+    rm -f "$source_file" "$excerpt_file" "$candidates_file" "$response_file"
     return 0
   fi
 
-  # Large manifests exceed Apfel's context window. Only lines naming an
-  # upstream skill can establish an explicit reference to that skill.
+  # Restrict the analyzer to skill names literally present in this manifest.
+  # This prevents it from selecting merely related names from the full catalog.
+  awk -F '\t' '
+    NR == FNR { catalog[$1] = $0; next }
+    {
+      for (name in catalog) {
+        if (index($0, name)) {
+          print catalog[name]
+        }
+      }
+    }
+  ' "$skill_catalog" "$source_file" | sort -u > "$candidates_file"
+  if [[ ! -s "$candidates_file" ]]; then
+    rm -f "$source_file" "$excerpt_file" "$candidates_file" "$response_file"
+    return 0
+  fi
+
+  primary_name="$(awk -F '\t' -v path="$primary_path" '$2 == path { print $1; exit }' "$skill_catalog")"
+  printf 'name: %s\n' "$primary_name" > "$excerpt_file"
   awk -F '\t' '
     NR == FNR { names[$1] = 1; next }
     {
@@ -121,27 +139,23 @@ detect_referenced_skills() {
         }
       }
     }
-  ' "$skill_catalog" "$source_file" > "$excerpt_file"
-  if [[ ! -s "$excerpt_file" ]]; then
-    rm -f "$source_file" "$excerpt_file" "$response_file"
-    return 0
-  fi
+  ' "$candidates_file" "$source_file" >> "$excerpt_file"
 
-  prompt='Analyze the attached manifest excerpts and skill catalog. Identify every distinct other skill that the excerpts explicitly instruct an agent to load, call, invoke, or delegate to. Do not infer topical relationships. Return only skill names from the catalog, one per line. Return NONE if there are no explicit references.'
+  prompt='Analyze the attached manifest excerpts and candidate skills. Identify every distinct candidate that the excerpts explicitly instruct an agent to load, call, invoke, or delegate to. Return only exact names from CANDIDATE SKILLS, one per line. Do not return related skills or any name not in CANDIDATE SKILLS. Return NONE if there are no explicit references.'
   if command -v fm >/dev/null 2>&1; then
-    if ! { printf 'SOURCE EXCERPTS:\n'; cat "$excerpt_file"; printf '\nSKILL CATALOG:\n'; cat "$skill_catalog"; } | fm "$prompt" > "$response_file"; then
+    if ! { printf 'SOURCE EXCERPTS:\n'; cat "$excerpt_file"; printf '\nCANDIDATE SKILLS:\n'; cat "$candidates_file"; } | fm "$prompt" > "$response_file"; then
       printf 'warning: fm could not inspect references for %s.\n' "$primary_path" >&2
-      rm -f "$source_file" "$excerpt_file" "$response_file"
+      rm -f "$source_file" "$excerpt_file" "$candidates_file" "$response_file"
       return 2
     fi
   elif command -v apfel >/dev/null 2>&1; then
-    if ! apfel --quiet --temperature 0 --max-tokens 128 -f "$excerpt_file" -f "$skill_catalog" "$prompt" > "$response_file"; then
+    if ! apfel --quiet --temperature 0 --max-tokens 128 -f "$excerpt_file" -f "$candidates_file" "$prompt" > "$response_file"; then
       printf 'warning: apfel could not inspect references for %s.\n' "$primary_path" >&2
-      rm -f "$source_file" "$excerpt_file" "$response_file"
+      rm -f "$source_file" "$excerpt_file" "$candidates_file" "$response_file"
       return 2
     fi
   else
-    rm -f "$source_file" "$excerpt_file" "$response_file"
+    rm -f "$source_file" "$excerpt_file" "$candidates_file" "$response_file"
     return 0
   fi
 
@@ -150,8 +164,8 @@ detect_referenced_skills() {
     if awk -v name="$catalog_name" '$0 == name { found = 1 } END { exit !found }' "$response_file"; then
       printf '%s\t%s\n' "$catalog_name" "$catalog_path"
     fi
-  done < "$skill_catalog"
-  rm -f "$source_file" "$excerpt_file" "$response_file"
+  done < "$candidates_file"
+  rm -f "$source_file" "$excerpt_file" "$candidates_file" "$response_file"
 }
 
 import_skill() {

@@ -137,14 +137,15 @@ while [[ $# -gt 0 ]]; do
   fi
 done
 if grep -Fqx 'name: example' "$source_file"; then
-  printf '%s\n' dependency shared
+  printf '%s\n' dependency shared unrelated
 fi
 EOF
   chmod +x "$bin/apfel"
   printf '%s\n' '---' 'name: example' '---' '' 'Call the Skill tool with "dependency" and "shared".' > "$upstream/skills/example/SKILL.md"
-  mkdir -p "$upstream/skills/dependency" "$upstream/skills/shared"
+  mkdir -p "$upstream/skills/dependency" "$upstream/skills/shared" "$upstream/skills/unrelated"
   printf '%s\n' '---' 'name: dependency' '---' > "$upstream/skills/dependency/SKILL.md"
   printf '%s\n' '---' 'name: shared' '---' > "$upstream/skills/shared/SKILL.md"
+  printf '%s\n' '---' 'name: unrelated' '---' > "$upstream/skills/unrelated/SKILL.md"
   git -C "$upstream" add skills
   git -C "$upstream" commit -qm 'Add skill dependencies'
 
@@ -154,9 +155,11 @@ EOF
   [[ "$output" == *'The upstream skill example explicitly references:'* ]]
   [[ "$output" == *'  - dependency'* ]]
   [[ "$output" == *'  - shared'* ]]
+  [[ "$output" != *'  - unrelated'* ]]
   [ -f "$consumer/skills/example/SKILL.md" ]
   [ -f "$consumer/skills/dependency/SKILL.md" ]
   [ -f "$consumer/skills/shared/SKILL.md" ]
+  [ ! -e "$consumer/skills/unrelated" ]
   [ "$(git -C "$consumer" log --format=%s | grep -Fc 'Import shared from')" -eq 1 ]
 }
 
