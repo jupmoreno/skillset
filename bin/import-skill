@@ -100,35 +100,48 @@ build_skill_catalog() {
 }
 
 detect_referenced_skills() {
-  local primary_path="$1" source_file catalog_file response_file prompt
+  local primary_path="$1" source_file excerpt_file response_file prompt
   source_file="$(mktemp "${TMPDIR:-/tmp}/skillset-source.XXXXXX")"
-  catalog_file="$(mktemp "${TMPDIR:-/tmp}/skillset-catalog.XXXXXX")"
+  excerpt_file="$(mktemp "${TMPDIR:-/tmp}/skillset-excerpt.XXXXXX")"
   response_file="$(mktemp "${TMPDIR:-/tmp}/skillset-references.XXXXXX")"
   if ! git show "$remote/$ref:$primary_path/SKILL.md" > "$source_file" 2>/dev/null; then
-    rm -f "$source_file" "$catalog_file" "$response_file"
-    return 0
-  fi
-  build_skill_catalog "$catalog_file"
-  if [[ ! -s "$catalog_file" ]]; then
-    rm -f "$source_file" "$catalog_file" "$response_file"
+    rm -f "$source_file" "$excerpt_file" "$response_file"
     return 0
   fi
 
-  prompt='Analyze the attached source skill and skill catalog. Identify every distinct other skill that the source explicitly instructs an agent to load, call, invoke, or delegate to. Do not infer topical relationships. Return only skill names from the catalog, one per line. Exclude the source skill itself. Return NONE if there are no explicit references.'
+  # Large manifests exceed Apfel's context window. Only lines naming an
+  # upstream skill can establish an explicit reference to that skill.
+  awk -F '\t' '
+    NR == FNR { names[$1] = 1; next }
+    {
+      for (name in names) {
+        if (index($0, name)) {
+          print
+          next
+        }
+      }
+    }
+  ' "$skill_catalog" "$source_file" > "$excerpt_file"
+  if [[ ! -s "$excerpt_file" ]]; then
+    rm -f "$source_file" "$excerpt_file" "$response_file"
+    return 0
+  fi
+
+  prompt='Analyze the attached manifest excerpts and skill catalog. Identify every distinct other skill that the excerpts explicitly instruct an agent to load, call, invoke, or delegate to. Do not infer topical relationships. Return only skill names from the catalog, one per line. Return NONE if there are no explicit references.'
   if command -v fm >/dev/null 2>&1; then
-    if ! { printf 'SOURCE SKILL:\n'; cat "$source_file"; printf '\nSKILL CATALOG:\n'; cat "$catalog_file"; } | fm "$prompt" > "$response_file"; then
-      printf 'warning: fm could not inspect skill references; importing only the requested skill.\n' >&2
-      rm -f "$source_file" "$catalog_file" "$response_file"
-      return 0
+    if ! { printf 'SOURCE EXCERPTS:\n'; cat "$excerpt_file"; printf '\nSKILL CATALOG:\n'; cat "$skill_catalog"; } | fm "$prompt" > "$response_file"; then
+      printf 'warning: fm could not inspect references for %s.\n' "$primary_path" >&2
+      rm -f "$source_file" "$excerpt_file" "$response_file"
+      return 2
     fi
   elif command -v apfel >/dev/null 2>&1; then
-    if ! apfel --quiet --temperature 0 --max-tokens 512 -f "$source_file" -f "$catalog_file" "$prompt" > "$response_file"; then
-      printf 'warning: apfel could not inspect skill references; importing only the requested skill.\n' >&2
-      rm -f "$source_file" "$catalog_file" "$response_file"
-      return 0
+    if ! apfel --quiet --temperature 0 --max-tokens 128 -f "$excerpt_file" -f "$skill_catalog" "$prompt" > "$response_file"; then
+      printf 'warning: apfel could not inspect references for %s.\n' "$primary_path" >&2
+      rm -f "$source_file" "$excerpt_file" "$response_file"
+      return 2
     fi
   else
-    rm -f "$source_file" "$catalog_file" "$response_file"
+    rm -f "$source_file" "$excerpt_file" "$response_file"
     return 0
   fi
 
@@ -137,8 +150,8 @@ detect_referenced_skills() {
     if awk -v name="$catalog_name" '$0 == name { found = 1 } END { exit !found }' "$response_file"; then
       printf '%s\t%s\n' "$catalog_name" "$catalog_path"
     fi
-  done < "$catalog_file"
-  rm -f "$source_file" "$catalog_file" "$response_file"
+  done < "$skill_catalog"
+  rm -f "$source_file" "$excerpt_file" "$response_file"
 }
 
 skill_name_for_path() {
@@ -180,10 +193,6 @@ render_dependency_tree() {
   printf '%s%s%s%s\n' "$prefix" "$connector" "$skill_name" "$marker"
   set_skill_state "$path" visiting
 
-  references_file="$(mktemp "${TMPDIR:-/tmp}/skillset-children.XXXXXX")"
-  detect_referenced_skills "$path" > "$references_file"
-  count="$(wc -l < "$references_file" | tr -d ' ')"
-  index=0
   if [[ -z "$connector" ]]; then
     child_prefix="$prefix"
   elif [[ "$connector" == '`- ' ]]; then
@@ -191,6 +200,19 @@ render_dependency_tree() {
   else
     child_prefix="${prefix}|  "
   fi
+
+  references_file="$(mktemp "${TMPDIR:-/tmp}/skillset-children.XXXXXX")"
+  if ! detect_referenced_skills "$path" > "$references_file"; then
+    printf '%s[references unavailable]\n' "$child_prefix"
+    rm -f "$references_file"
+    set_skill_state "$path" done
+    if [[ "$root" == false && ! -e "skills/$skill_name" ]]; then
+      printf '%s\t%s\n' "$skill_name" "$path" >> "$dependency_candidates"
+    fi
+    return 0
+  fi
+  count="$(wc -l < "$references_file" | tr -d ' ')"
+  index=0
   while IFS=$'\t' read -r child_name child_path; do
     [[ -n "$child_path" ]] || continue
     index=$((index + 1))

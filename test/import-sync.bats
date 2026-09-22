@@ -137,11 +137,14 @@ while [[ $# -gt 0 ]]; do
   fi
 done
 if grep -Fqx 'name: example' "$source_file"; then
-  printf '%s\n' dependency shared
+  printf '%s\n' dependency shared large
 elif grep -Fqx 'name: dependency' "$source_file"; then
   printf '%s\n' nested shared
 elif grep -Fqx 'name: nested' "$source_file"; then
   printf '%s\n' dependency
+elif grep -Fqx 'name: large' "$source_file"; then
+  [ "$(wc -c < "$source_file" | tr -d ' ')" -lt 1000 ]
+  printf '%s\n' shared
 fi
 EOF
   chmod +x "$bin/apfel"
@@ -150,6 +153,12 @@ EOF
   printf '%s\n' '---' 'name: dependency' '---' '' 'Call the Skill tool with "nested" and "shared".' > "$upstream/skills/dependency/SKILL.md"
   printf '%s\n' '---' 'name: nested' '---' '' 'Call the Skill tool with "dependency".' > "$upstream/skills/nested/SKILL.md"
   printf '%s\n' '---' 'name: shared' '---' > "$upstream/skills/shared/SKILL.md"
+  mkdir -p "$upstream/skills/large"
+  {
+    printf '%s\n' '---' 'name: large' '---' '' 'Call the Skill tool with "shared".'
+    for _ in {1..500}; do printf '%s\n' 'Unrelated instruction text.'; done
+  } > "$upstream/skills/large/SKILL.md"
+  printf '%s\n' 'Call the Skill tool with "large".' >> "$upstream/skills/example/SKILL.md"
   git -C "$upstream" add skills
   git -C "$upstream" commit -qm 'Add skill dependencies'
 
@@ -162,6 +171,7 @@ EOF
   [ -f "$consumer/skills/dependency/SKILL.md" ]
   [ -f "$consumer/skills/nested/SKILL.md" ]
   [ -f "$consumer/skills/shared/SKILL.md" ]
+  [ -f "$consumer/skills/large/SKILL.md" ]
   [ "$(git -C "$consumer" log --format=%s | grep -Fc 'Import shared from')" -eq 1 ]
 }
 
