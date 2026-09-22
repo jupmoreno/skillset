@@ -123,7 +123,7 @@ assert_signed_commit() {
   ! git -C "$consumer" cat-file -p 'HEAD^^2' | grep -q '^gpgsig '
 }
 
-@test "adds all explicitly referenced skills once when requested" {
+@test "lists and adds direct referenced skills when requested" {
   rm "$bin/fm"
   cat > "$bin/apfel" <<'EOF'
 #!/usr/bin/env bash
@@ -137,41 +137,26 @@ while [[ $# -gt 0 ]]; do
   fi
 done
 if grep -Fqx 'name: example' "$source_file"; then
-  printf '%s\n' dependency shared large
-elif grep -Fqx 'name: dependency' "$source_file"; then
-  printf '%s\n' nested shared
-elif grep -Fqx 'name: nested' "$source_file"; then
-  printf '%s\n' dependency
-elif grep -Fqx 'name: large' "$source_file"; then
-  [ "$(wc -c < "$source_file" | tr -d ' ')" -lt 1000 ]
-  printf '%s\n' shared
+  printf '%s\n' dependency shared
 fi
 EOF
   chmod +x "$bin/apfel"
   printf '%s\n' '---' 'name: example' '---' '' 'Call the Skill tool with "dependency" and "shared".' > "$upstream/skills/example/SKILL.md"
-  mkdir -p "$upstream/skills/dependency" "$upstream/skills/nested" "$upstream/skills/shared"
-  printf '%s\n' '---' 'name: dependency' '---' '' 'Call the Skill tool with "nested" and "shared".' > "$upstream/skills/dependency/SKILL.md"
-  printf '%s\n' '---' 'name: nested' '---' '' 'Call the Skill tool with "dependency".' > "$upstream/skills/nested/SKILL.md"
+  mkdir -p "$upstream/skills/dependency" "$upstream/skills/shared"
+  printf '%s\n' '---' 'name: dependency' '---' > "$upstream/skills/dependency/SKILL.md"
   printf '%s\n' '---' 'name: shared' '---' > "$upstream/skills/shared/SKILL.md"
-  mkdir -p "$upstream/skills/large"
-  {
-    printf '%s\n' '---' 'name: large' '---' '' 'Call the Skill tool with "shared".'
-    for _ in {1..500}; do printf '%s\n' 'Unrelated instruction text.'; done
-  } > "$upstream/skills/large/SKILL.md"
-  printf '%s\n' 'Call the Skill tool with "large".' >> "$upstream/skills/example/SKILL.md"
   git -C "$upstream" add skills
   git -C "$upstream" commit -qm 'Add skill dependencies'
 
   run bash -c "cd \"$consumer\" && printf 'yes\\n' | PATH=\"$bin:\$PATH\" \"$repo_root/bin/import-skill\" --repo \"$upstream\" --ref main --path skills/example"
 
   assert_success
-  [[ "$output" == *'dependency [cycle]'* ]]
-  [[ "$output" == *'shared [shared]'* ]]
+  [[ "$output" == *'The upstream skill example explicitly references:'* ]]
+  [[ "$output" == *'  - dependency'* ]]
+  [[ "$output" == *'  - shared'* ]]
   [ -f "$consumer/skills/example/SKILL.md" ]
   [ -f "$consumer/skills/dependency/SKILL.md" ]
-  [ -f "$consumer/skills/nested/SKILL.md" ]
   [ -f "$consumer/skills/shared/SKILL.md" ]
-  [ -f "$consumer/skills/large/SKILL.md" ]
   [ "$(git -C "$consumer" log --format=%s | grep -Fc 'Import shared from')" -eq 1 ]
 }
 

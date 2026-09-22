@@ -22,9 +22,8 @@ When `commit.gpgSign` is enabled, both subtree commits are signed. This preserve
 updateability without importing the upstream repository's full history.
 
 If `fm` or `apfel` is installed, the importer uses it to identify explicit
-references to other upstream skills. It prints the full dependency tree and
-asks whether to import all missing referenced skills before importing the
-requested skill.
+references to other upstream skills. It lists the direct references and asks
+whether to import the missing ones before importing the requested skill.
 
 For another Git host or source reference, provide the repository, branch, and
 directory explicitly:
